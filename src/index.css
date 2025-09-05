@@ -1,0 +1,208 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+/* Global animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fadeInUp {
+  from { 
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to { 
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.animate-fadeInUp {
+  animation: fadeInUp 0.6s ease-out forwards;
+}
+
+.animate-slideDown {
+  animation: slideDown 0.5s ease-out;
+}
+
+.animate-slideInLeft {
+  animation: slideInLeft 0.6s ease-out forwards;
+}
+
+.animate-slideInRight {
+  animation: slideInRight 0.6s ease-out forwards;
+}
+
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  .animate-fadeIn,
+  .animate-fadeInUp,
+  .animate-slideDown,
+  .animate-slideInLeft,
+  .animate-slideInRight {
+    animation: none;
+  }
+  
+  * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+/* Global button hover styles */
+button:not([disabled]):not([aria-disabled="true"]):hover,
+button:not([disabled]):not([aria-disabled="true"]):focus-visible,
+a[role="button"]:not([disabled]):not([aria-disabled="true"]):hover,
+a[role="button"]:not([disabled]):not([aria-disabled="true"]):focus-visible {
+  background-color: #22c55e !important;
+  border-color: #22c55e !important;
+  color: white !important;
+  transition: all 180ms ease-in-out;
+}
+
+/* Ensure proper contrast for icons in hovered buttons */
+button:not([disabled]):not([aria-disabled="true"]):hover svg,
+button:not([disabled]):not([aria-disabled="true"]):focus-visible svg,
+a[role="button"]:not([disabled]):not([aria-disabled="true"]):hover svg,
+a[role="button"]:not([disabled]):not([aria-disabled="true"]):focus-visible svg {
+  color: white !important;
+}
+
+/* Opt-out for scope cards/buttons: keep gray background and icon color on hover */
+/* Stronger specificity to beat global button hover */
+button.no-hover-override:not([disabled]):not([aria-disabled="true"]):hover,
+button.no-hover-override:not([disabled]):not([aria-disabled="true"]):focus-visible,
+a.no-hover-override[role="button"]:not([disabled]):not([aria-disabled="true"]):hover,
+a.no-hover-override[role="button"]:not([disabled]):not([aria-disabled="true"]):focus-visible {
+  background-color: inherit !important;
+  border-color: inherit !important;
+  color: inherit !important;
+}
+button.no-hover-override:not([disabled]):not([aria-disabled="true"]):hover svg,
+button.no-hover-override:not([disabled]):not([aria-disabled="true"]):focus-visible svg,
+a.no-hover-override[role="button"]:not([disabled]):not([aria-disabled="true"]):hover svg,
+a.no-hover-override[role="button"]:not([disabled]):not([aria-disabled="true"]):focus-visible svg {
+  color: inherit !important;
+}
+
+/* Category hover palettes for scope cards */
+button.no-hover-override.hover-blue:not([disabled]):not([aria-disabled="true"]):hover,
+button.no-hover-override.hover-blue:not([disabled]):not([aria-disabled="true"]):focus-visible {
+  background-color: #eff6ff !important; /* tailwind bg-blue-50 */
+  border-color: #bfdbfe !important;     /* tailwind border-blue-200 */
+}
+button.no-hover-override.hover-red:not([disabled]):not([aria-disabled="true"]):hover,
+button.no-hover-override.hover-red:not([disabled]):not([aria-disabled="true"]):focus-visible {
+  background-color: #fef2f2 !important; /* tailwind bg-red-50 */
+  border-color: #fecaca !important;     /* tailwind border-red-200 */
+}
+button.no-hover-override.hover-green:not([disabled]):not([aria-disabled="true"]):hover,
+button.no-hover-override.hover-green:not([disabled]):not([aria-disabled="true"]):focus-visible {
+  background-color: #f0fdf4 !important; /* tailwind bg-green-50 */
+  border-color: #bbf7d0 !important;     /* tailwind border-green-200 */
+}
+button.no-hover-override.hover-purple:not([disabled]):not([aria-disabled="true"]):hover,
+button.no-hover-override.hover-purple:not([disabled]):not([aria-disabled="true"]):focus-visible {
+  background-color: #faf5ff !important; /* tailwind bg-purple-50 */
+  border-color: #e9d5ff !important;     /* tailwind border-purple-200 */
+}
+
+/* Exception for disabled buttons */
+button[disabled],
+button[aria-disabled="true"],
+a[disabled],
+a[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+button[disabled]:hover,
+button[aria-disabled="true"]:hover,
+a[disabled]:hover,
+a[aria-disabled="true"]:hover {
+  background-color: initial !important;
+  border-color: initial !important;
+  color: initial !important;
+}
+
+/* Focus styles for accessibility */
+*:focus-visible {
+  outline: 2px solid #22c55e;
+  outline-offset: 2px;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Image loading optimization */
+img {
+  height: auto;
+  max-width: 100%;
+}
+
+img[loading="lazy"] {
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+img[loading="lazy"].loaded {
+  opacity: 1;
+}

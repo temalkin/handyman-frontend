@@ -1,0 +1,48 @@
+/* CSS variables for background images using Supabase Storage */
+/* Import this once in main.jsx */
+
+:root {
+  /* Hero backgrounds */
+  --img-hero: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/backgrounds/hero-bg.jpg');
+  --img-hero-large: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/backgrounds/hero-bg-large.jpg');
+  --img-hero-medium: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/backgrounds/hero-bg-medium.jpg');
+  
+  /* Service page backgrounds */
+  --img-drywall-bg: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/backgrounds/drywall-bg.jpg');
+  --img-interior-painting-bg: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/backgrounds/interior-painting-bg.jpg');
+  --img-lvp-flooring-bg: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/backgrounds/lvp-flooring-bg.jpg');
+  --img-carpentry-bg: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/backgrounds/carpentry-bg.jpg');
+  --img-floor-install-bg: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/backgrounds/floor-install-bg.jpg');
+  --img-garage-epoxy-bg: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/backgrounds/garage-epoxy-bg.jpg');
+  --img-doors-windows-bg: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/backgrounds/doors-windows-bg.jpg');
+  --img-window-treatments-bg: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/backgrounds/window-treatments-bg.jpg');
+  --img-lighting-bg: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/backgrounds/lighting-bg.jpg');
+  --img-smart-home-bg: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/backgrounds/smart-home-bg.jpg');
+  --img-painting-bg: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/backgrounds/painting-bg.jpg');
+  --img-pressure-washing-bg: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/backgrounds/pressure-washing-bg.jpg');
+  --img-wainscoting-bg: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/backgrounds/wainscoting-bg.jpg');
+  
+  /* Fallback for missing images */
+  --img-placeholder: url('https://kqjwavmmacjgguunhgoe.supabase.co/storage/v1/object/public/site-assets/placeholders/blank.jpg');
+}
+
+/* Helper classes for background images */
+.bg-hero { background-image: var(--img-hero); }
+.bg-hero-large { background-image: var(--img-hero-large); }
+.bg-hero-medium { background-image: var(--img-hero-medium); }
+.bg-drywall { background-image: var(--img-drywall-bg); }
+.bg-interior-painting { background-image: var(--img-interior-painting-bg); }
+.bg-lvp-flooring { background-image: var(--img-lvp-flooring-bg); }
+.bg-carpentry { background-image: var(--img-carpentry-bg); }
+.bg-floor-install { background-image: var(--img-floor-install-bg); }
+.bg-garage-epoxy { background-image: var(--img-garage-epoxy-bg); }
+.bg-doors-windows { background-image: var(--img-doors-windows-bg); }
+.bg-window-treatments { background-image: var(--img-window-treatments-bg); }
+.bg-lighting { background-image: var(--img-lighting-bg); }
+.bg-smart-home { background-image: var(--img-smart-home-bg); }
+.bg-painting { background-image: var(--img-painting-bg); }
+.bg-pressure-washing { background-image: var(--img-pressure-washing-bg); }
+.bg-wainscoting { background-image: var(--img-wainscoting-bg); }
+
+/* Fallback for missing backgrounds */
+.bg-placeholder { background-image: var(--img-placeholder); }
