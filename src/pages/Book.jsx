@@ -14,6 +14,8 @@ import ProjectDetailsStep from '../components/steps/ProjectDetailsStep';
 import ContactInfoStep from '../components/steps/ContactInfoStep';
 import { serviceData } from '../data/serviceData';
 import FormToggle from '../components/FormToggle';
+import { storeRequest, sendTelegram, sendSms, signFileUpload, commitUploadedFile } from '../common/BackendAPI';
+import { buildTelegramMessage } from '../common/MessageFormatter';
 
 const {FiList,FiClock,FiMessageSquare,FiPhone,FiMail,FiSend,FiCheck}=FiIcons;
 
@@ -33,6 +35,9 @@ const Book=()=> {
   const [formErrors,setFormErrors]=useState({});
   const [isSubmitted,setIsSubmitted]=useState(false);
   const [isSubmitting,setIsSubmitting]=useState(false);
+  const [scopeSubmitting, setScopeSubmitting] = useState(false);
+  const [scopeSubmitted, setScopeSubmitted] = useState(false);
+  const [hourlySubmitting, setHourlySubmitting] = useState(false);
 
   const tabs=[
     {id: 'scope',label: 'Order by Scope',icon: FiList},
@@ -115,16 +120,65 @@ const Book=()=> {
     }
     setIsSubmitting(true);
     try {
-      // Simulate form submission
-      const submissionData={
-        ...formData,
-        source_page: 'Book',
-        timestamp: new Date().toISOString()
-      };
-      // In a real implementation,you would send this to your form handler
-      console.log('Form submission:',submissionData);
-      // Simulate API delay
-      await new Promise(resolve=> setTimeout(resolve,1000));
+      // get or create session id
+      let sessionId = ''
+      try {
+        const K = 'site_session_id'
+        sessionId = localStorage.getItem(K) || ''
+        if (!sessionId) {
+          sessionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+          localStorage.setItem(K, sessionId)
+        }
+      } catch (_) {}
+
+      const payload = {
+        source: 'website',
+        form_type: 'contact',
+        session_id: sessionId || undefined,
+        contact: {
+          name: formData.name,
+          email: formData.email,
+          phone: formData.phone,
+          address: formData.address,
+        },
+        meta: {
+          source_page: 'Book',
+          description: formData.details || ''
+        }
+      }
+
+      const resp = await storeRequest(payload)
+
+      // Telegram notification (fire-and-forget)
+      try {
+        const formId = (resp && (resp.form_id || resp.request_id)) || ''
+        const msg = buildTelegramMessage('New Contact (Book)', {
+          Name: formData.name,
+          Phone: formData.phone,
+          Email: formData.email,
+          Address: formData.address || '-',
+          Details: formData.details || '-',
+          FormID: formId
+        })
+        await sendTelegram(msg)
+      } catch (_) {}
+
+      // SMS confirmation to client (fire-and-forget)
+      try {
+        const normalizePhoneE164US = (value) => {
+          const digits = String(value || '').replace(/\D/g, '')
+          if (!digits) return ''
+          if (digits.length === 10) return `+1${digits}`
+          if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`
+          return digits.startsWith('+') ? digits : `+${digits}`
+        }
+        const to = normalizePhoneE164US(formData.phone)
+        if (to) {
+          const smsText = `Hi${formData.name ? ' ' + formData.name : ''}! Thanks for contacting Handyman of South Charlotte. We received your request and will reach out soon.`
+          await sendSms({ to, text: smsText, subject: 'Contact Request' })
+        }
+      } catch (_) {}
+
       setIsSubmitted(true);
       // Reset form after successful submission
       setTimeout(()=> {
@@ -145,6 +199,194 @@ const Book=()=> {
       setIsSubmitting(false);
     }
   };
+
+  const handleScopeSubmit = async () => {
+    if (scopeSubmitting) return;
+    setScopeSubmitting(true);
+    try {
+      // session id
+      let sessionId = ''
+      try {
+        const K = 'site_session_id'
+        sessionId = localStorage.getItem(K) || ''
+        if (!sessionId) {
+          sessionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+          localStorage.setItem(K, sessionId)
+        }
+      } catch (_) {}
+
+      // Persist form
+      const payload = {
+        source: 'website',
+        form_type: 'contact',
+        session_id: sessionId || undefined,
+        contact: {
+          fullName: formData.fullName || formData.name,
+          email: formData.email,
+          phone: formData.phone,
+          address: formData.address,
+          consentToText: !!formData.consentToText,
+        },
+        meta: {
+          source_page: 'Book: Scope',
+          projectDescription: formData.projectDescription || '',
+          timeline: formData.timeline || '',
+          mainCategories: Array.isArray(selectedCategories) ? selectedCategories : [],
+          serviceGroups: Array.isArray(selectedGroups) ? selectedGroups : [],
+        },
+      }
+
+      const resp = await storeRequest(payload)
+      const formId = (resp && (resp.form_id || resp.request_id)) || ''
+
+      // Upload photos and collect public links
+      const photoLinks = []
+      try {
+        const photos = Array.isArray(formData.photos) ? formData.photos : []
+        for (const it of photos) {
+          const f = (it && it.file) ? it.file : it
+          if (!f) continue
+          const sig = await signFileUpload({ filename: f.name || 'photo.jpg', contentType: f.type || 'application/octet-stream', formId })
+          await fetch(sig.put_url, { method: 'PUT', headers: { 'Content-Type': sig.content_type || f.type || 'application/octet-stream' }, body: f })
+          const committed = await commitUploadedFile({ formId, key: sig.key, contentType: sig.content_type || f.type, size: f.size })
+          if (committed && committed.url) photoLinks.push(committed.url)
+        }
+      } catch (_) {}
+
+      // Telegram
+      try {
+        const msg = buildTelegramMessage('New Order by Scope (Book)', {
+          Name: formData.fullName || formData.name,
+          Phone: formData.phone,
+          Email: formData.email || '-',
+          Address: formData.address || '-',
+          Categories: Array.isArray(selectedCategories) ? selectedCategories : [],
+          ServiceGroups: Array.isArray(selectedGroups) ? selectedGroups : [],
+          Timeline: formData.timeline || '-',
+          Description: formData.projectDescription || '-',
+          Photos: Array.isArray(formData.photos) ? formData.photos.length : 0,
+          FormID: formId,
+        })
+        const linksText = (photoLinks.length > 0) ? ('\n' + photoLinks.map((u, i) => `Photo ${i + 1}: ${u}`).join('\n')) : ''
+        await sendTelegram(msg + linksText)
+      } catch (_) {}
+
+      // SMS (respect consent)
+      try {
+        const normalizePhoneE164US = (value) => {
+          const digits = String(value || '').replace(/\D/g, '')
+          if (!digits) return ''
+          if (digits.length === 10) return `+1${digits}`
+          if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`
+          return digits.startsWith('+') ? digits : `+${digits}`
+        }
+        const to = normalizePhoneE164US(formData.phone)
+        if (to && formData.consentToText) {
+          const smsText = `Hi${formData.fullName ? ' ' + formData.fullName : ''}! Thanks for your request. We received your scope selection and will contact you soon.`
+          await sendSms({ to, text: smsText, subject: 'Order by Scope' })
+        }
+      } catch (_) {}
+
+      setScopeSubmitted(true)
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('Scope submit failed', err)
+    } finally {
+      setScopeSubmitting(false)
+    }
+  }
+
+  const handleHourlySubmit = async () => {
+    if (hourlySubmitting) return;
+    setHourlySubmitting(true);
+    try {
+      // session id
+      let sessionId = ''
+      try {
+        const K = 'site_session_id'
+        sessionId = localStorage.getItem(K) || ''
+        if (!sessionId) {
+          sessionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+          localStorage.setItem(K, sessionId)
+        }
+      } catch (_) {}
+
+      // Persist hourly request
+      const payload = {
+        source: 'website',
+        form_type: 'hourly',
+        session_id: sessionId || undefined,
+        contact: {
+          fullName: formData.hourlyFullName,
+          email: formData.hourlyEmail,
+          phone: formData.hourlyPhone,
+          address: formData.hourlyAddress,
+          consentToText: !!formData.hourlyConsentToText,
+        },
+        meta: {
+          source_page: 'Book: Hourly',
+          hourlyPackage: formData.hourlyPackage,
+          description: formData.hourlyDescription || '',
+        },
+      }
+
+      const resp = await storeRequest(payload)
+      const formId = (resp && (resp.form_id || resp.request_id)) || ''
+
+      // Upload photos and collect public links
+      const photoLinks = []
+      try {
+        const photos = Array.isArray(formData.hourlyPhotos) ? formData.hourlyPhotos : []
+        for (const it of photos) {
+          const f = (it && it.file) ? it.file : it
+          if (!f) continue
+          const sig = await signFileUpload({ filename: f.name || 'photo.jpg', contentType: f.type || 'application/octet-stream', formId })
+          await fetch(sig.put_url, { method: 'PUT', headers: { 'Content-Type': sig.content_type || f.type || 'application/octet-stream' }, body: f })
+          const committed = await commitUploadedFile({ formId, key: sig.key, contentType: sig.content_type || f.type, size: f.size })
+          if (committed && committed.url) photoLinks.push(committed.url)
+        }
+      } catch (_) {}
+
+      // Telegram
+      try {
+        const msg = buildTelegramMessage('New Hourly Booking', {
+          Package: formData.hourlyPackage || '-',
+          Description: formData.hourlyDescription || '-',
+          Address: formData.hourlyAddress || '-',
+          FullName: formData.hourlyFullName || '-',
+          Phone: formData.hourlyPhone || '-',
+          Email: formData.hourlyEmail || '-',
+          Photos: Array.isArray(formData.hourlyPhotos) ? formData.hourlyPhotos.length : 0,
+          FormID: formId,
+        })
+        const linksText = (photoLinks.length > 0) ? ('\n' + photoLinks.map((u, i) => `Photo ${i + 1}: ${u}`).join('\n')) : ''
+        await sendTelegram(msg + linksText)
+      } catch (_) {}
+
+      // SMS
+      try {
+        const normalizePhoneE164US = (value) => {
+          const digits = String(value || '').replace(/\D/g, '')
+          if (!digits) return ''
+          if (digits.length === 10) return `+1${digits}`
+          if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`
+          return digits.startsWith('+') ? digits : `+${digits}`
+        }
+        const to = normalizePhoneE164US(formData.hourlyPhone)
+        if (to && formData.hourlyConsentToText) {
+          const smsText = `Hi${formData.hourlyFullName ? ' ' + formData.hourlyFullName : ''}! Thanks for your hourly booking — we will contact you soon.`
+          await sendSms({ to, text: smsText, subject: 'Hourly Booking' })
+        }
+      } catch (_) {}
+
+      // Let child form show success UI (it already sets formSubmitted)
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('Hourly submit failed', err)
+    } finally {
+      setHourlySubmitting(false)
+    }
+  }
 
   return (
     <div className="bg-white">
@@ -386,7 +628,7 @@ const Book=()=> {
               <HourlyBookingForm
                 formData={formData}
                 onDataChange={(key, val)=> setFormData(prev=> ({...prev, [key]: val}))}
-                onSubmit={()=> console.log('Hourly submit')}
+                onSubmit={handleHourlySubmit}
               />
             </div>
           )}
@@ -429,12 +671,24 @@ const Book=()=> {
                 />
               )}
               {scopeStep === 4 && (
-                <ContactInfoStep
-                  formData={formData}
-                  onDataChange={(key, val)=> setFormData(prev=> ({...prev, [key]: val}))}
-                  onPrev={()=> setScopeStep(3)}
-                  onSubmit={()=> console.log('Scope submit', { selectedCategories, selectedGroups, formData })}
-                />
+                <>
+                  {scopeSubmitted ? (
+                    <div className="text-center py-8">
+                      <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                        <SafeIcon icon={FiCheck} className="w-6 h-6 text-green-600" />
+                      </div>
+                      <h3 className="text-lg font-semibold text-green-800 mb-2">Thanks! We've received your request.</h3>
+                      <p className="text-green-700 text-sm">We will reach out shortly.</p>
+                    </div>
+                  ) : (
+                    <ContactInfoStep
+                      formData={formData}
+                      onDataChange={(key, val)=> setFormData(prev=> ({...prev, [key]: val}))}
+                      onPrev={()=> setScopeStep(3)}
+                      onSubmit={handleScopeSubmit}
+                    />
+                  )}
+                </>
               )}
             </div>
           )}

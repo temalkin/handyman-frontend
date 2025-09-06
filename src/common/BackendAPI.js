@@ -141,3 +141,30 @@ export const aiIngestMessage = async ({ sessionId, sender, content = '', photosC
 };
 
 
+// MinIO presigned upload helpers
+export const signFileUpload = async ({ filename, contentType, formId }) => {
+  const res = await fetch(apiUrl('/api/files/sign-upload'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename, content_type: contentType, form_id: formId })
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`signFileUpload failed: ${res.status} ${t}`);
+  }
+  return res.json();
+};
+
+export const commitUploadedFile = async ({ formId, key, contentType, size }) => {
+  const res = await fetch(apiUrl('/api/files/commit'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ form_id: formId, key, content_type: contentType, size })
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`commitUploadedFile failed: ${res.status} ${t}`);
+  }
+  return res.json();
+};
+

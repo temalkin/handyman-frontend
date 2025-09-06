@@ -5,6 +5,8 @@ import AddressAutocomplete from '../common/AddressAutocomplete'
 import { IMAGES, getGalleryImage } from '../config/images'
 import ImageWithFallback from '../components/ImageWithFallback'
 import * as FiIcons from 'react-icons/fi'
+import { storeRequest, sendTelegram, sendSms } from '../common/BackendAPI'
+import { buildTelegramMessage } from '../common/MessageFormatter'
 
 const { FiX, FiChevronLeft, FiChevronRight, FiSend, FiPhone, FiCheck } = FiIcons
 
@@ -210,15 +212,65 @@ const Gallery = () => {
     }
     setIsSubmitting(true)
     try {
-      const submissionData = {
-        ...formData,
-        source_page: 'Gallery',
-        timestamp: new Date().toISOString()
+      // get or create session id
+      let sessionId = ''
+      try {
+        const K = 'site_session_id'
+        sessionId = localStorage.getItem(K) || ''
+        if (!sessionId) {
+          sessionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+          localStorage.setItem(K, sessionId)
+        }
+      } catch (_) {}
+
+      const payload = {
+        source: 'website',
+        form_type: 'contact',
+        session_id: sessionId || undefined,
+        contact: {
+          name: formData.name,
+          email: formData.email,
+          phone: formData.phone,
+          address: formData.address,
+        },
+        meta: {
+          source_page: 'Gallery',
+          description: formData.details || ''
+        }
       }
-      // In a real implementation, you would send this to your form handler
-      console.log('Form submission:', submissionData)
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 1000))
+
+      const resp = await storeRequest(payload)
+
+      // Telegram notification (fire-and-forget)
+      try {
+        const formId = (resp && (resp.form_id || resp.request_id)) || ''
+        const msg = buildTelegramMessage('New Contact (Gallery)', {
+          Name: formData.name,
+          Phone: formData.phone,
+          Email: formData.email,
+          Address: formData.address || '-',
+          Details: formData.details || '-',
+          FormID: formId
+        })
+        await sendTelegram(msg)
+      } catch (_) {}
+
+      // SMS confirmation to client (fire-and-forget)
+      try {
+        const normalizePhoneE164US = (value) => {
+          const digits = String(value || '').replace(/\D/g, '')
+          if (!digits) return ''
+          if (digits.length === 10) return `+1${digits}`
+          if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`
+          return digits.startsWith('+') ? digits : `+${digits}`
+        }
+        const to = normalizePhoneE164US(formData.phone)
+        if (to) {
+          const smsText = `Hi${formData.name ? ' ' + formData.name : ''}! Thanks for contacting Handyman of South Charlotte. We received your request and will reach out soon.`
+          await sendSms({ to, text: smsText, subject: 'Contact Request' })
+        }
+      } catch (_) {}
+
       setIsSubmitted(true)
       // Reset form after successful submission
       setTimeout(() => {

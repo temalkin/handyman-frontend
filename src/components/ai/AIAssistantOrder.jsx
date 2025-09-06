@@ -7,18 +7,21 @@ import { buildTelegramMessage } from '../../common/MessageFormatter'
 import {
   sendSms as backendSendSms,
   sendTelegram as backendSendTelegram,
-  sendTelegramWithPhotos as backendSendTelegramWithPhotos,
   sendTelegramDocument as backendSendTelegramDocument,
   storeRequest,
   uploadPhotos,
   aiEnsureRequest,
   aiIngestMessage,
+  signFileUpload,
+  commitUploadedFile,
 } from '../../common/BackendAPI'
 
 const { FiSend, FiUpload, FiX, FiMessageCircle, FiClipboard, FiUser, FiPlusCircle, FiArrowRight, FiRotateCcw } = FiIcons
 
 const AIAssistantOrder = ({ formData, onDataChange, onSubmit }) => {
   const [isTyping, setIsTyping] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
   const chatRef = useRef(null)
   const fileInputRef = useRef(null)
   const messageInputRef = useRef(null)
@@ -127,6 +130,21 @@ const AIAssistantOrder = ({ formData, onDataChange, onSubmit }) => {
           onDataChange('aiMessages', [{ sender: 'ai', content: GREETING_MESSAGE }])
         }
       }
+
+      // Load jobs for this session if present
+      try {
+        const jobsKey = `ai_jobs_${sid}`
+        const storedJobs = localStorage.getItem(jobsKey)
+        if (storedJobs) {
+          const parsedJobs = JSON.parse(storedJobs)
+          if (Array.isArray(parsedJobs) && parsedJobs.length > 0) {
+            const currentJobs = Array.isArray(formData.aiJobs) ? formData.aiJobs : []
+            if (currentJobs.length === 0) {
+              onDataChange('aiJobs', parsedJobs.map(j => ({ id: j.id, name: j.name, price: Number(j.price) || 0 })))
+            }
+          }
+        }
+      } catch {}
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -140,6 +158,16 @@ const AIAssistantOrder = ({ formData, onDataChange, onSubmit }) => {
       localStorage.setItem(chatKey, JSON.stringify(serializable))
     } catch {}
   }, [formData.aiMessages])
+
+  // Persist jobs to localStorage per session
+  useEffect(() => {
+    try {
+      if (!sessionIdRef.current) return
+      const jobsKey = `ai_jobs_${sessionIdRef.current}`
+      const serializable = (formData.aiJobs || []).map(j => ({ id: j.id, name: j.name, price: Number(j.price) || 0 }))
+      localStorage.setItem(jobsKey, JSON.stringify(serializable))
+    } catch {}
+  }, [formData.aiJobs])
   const adjustTextarea = (el) => {
     if (!el) return
     const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 24
@@ -183,11 +211,23 @@ const AIAssistantOrder = ({ formData, onDataChange, onSubmit }) => {
         if (hasPhotos) {
           try {
             const ensure = await aiEnsureRequest({ sessionId: sessionIdRef.current })
-            const requestId = ensure?.request_id || ensure?.requestId
-            if (requestId) {
-              const up = await uploadPhotos({ requestId, origin: 'ai-message', files: photosToSend, sessionId: sessionIdRef.current })
-              const items = (up && Array.isArray(up.items)) ? up.items : []
-              storagePaths = items.map(it => it?.storage_path).filter(Boolean)
+            const formId = ensure?.request_id || ensure?.requestId
+            if (formId) {
+              for (const it of photosToSend) {
+                let file = it && it.file
+                if (!file && it && it.url && typeof it.url === 'string' && it.url.startsWith('blob:')) {
+                  try {
+                    const resp = await fetch(it.url)
+                    const blob = await resp.blob()
+                    file = new File([blob], it.name || 'photo.jpg', { type: blob.type || 'image/jpeg' })
+                  } catch {}
+                }
+                if (!file) continue
+                const sig = await signFileUpload({ filename: file.name || 'photo.jpg', contentType: file.type || 'application/octet-stream', formId })
+                await fetch(sig.put_url, { method: 'PUT', headers: { 'Content-Type': sig.content_type || file.type || 'application/octet-stream' }, body: file })
+                await commitUploadedFile({ formId, key: sig.key, contentType: sig.content_type || file.type, size: file.size })
+                storagePaths.push(sig.key)
+              }
             }
           } catch (_) {}
         }
@@ -253,6 +293,40 @@ const AIAssistantOrder = ({ formData, onDataChange, onSubmit }) => {
         const replyMessage = normalized?.reply_message || normalized?.message || 'Thanks! I have recorded that. Could you share any other details about the job?'
         const withAI = [...updated, { sender: 'ai', content: replyMessage }]
         onDataChange('aiMessages', withAI)
+        try { await aiIngestMessage({ sessionId: sessionIdRef.current, sender: 'ai', content: replyMessage, photosCount: 0 }) } catch (_) {}
+
+        // Handle job from AI
+        try {
+          const job = normalized?.job
+          if (job && typeof job === 'object') {
+            const type = String(job.type || '').toLowerCase()
+            const id = job.id && String(job.id).trim() !== '' ? job.id : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+            const name = typeof job.name === 'string' ? job.name.trim() : ''
+            const price = Number(job.price)
+            const existing = Array.isArray(formData.aiJobs) ? [...formData.aiJobs] : []
+            const idxById = (targetId) => existing.findIndex((j) => j.id === targetId)
+
+            if (type === 'create') {
+              if (name && !Number.isNaN(price) && price > 0) {
+                const idx = idxById(id)
+                const newJob = { id, name, price }
+                if (idx >= 0) existing[idx] = newJob; else existing.push(newJob)
+                onDataChange('aiJobs', existing)
+              }
+            } else if (type === 'update') {
+              const idx = idxById(id)
+              if (idx >= 0) {
+                const updatedJob = { ...existing[idx] }
+                if (name) updatedJob.name = name
+                if (!Number.isNaN(price)) updatedJob.price = price
+                onDataChange('aiJobs', existing.map((j, i) => i === idx ? updatedJob : j))
+              }
+            } else if (type === 'delete' || type === 'deleted') {
+              const filtered = existing.filter((j) => j.id !== id)
+              onDataChange('aiJobs', filtered)
+            }
+          }
+        } catch {}
       } catch (err) {
         const withErr = [...updated, { sender: 'ai', content: 'Sorry, something went wrong. Please try again.' }]
         onDataChange('aiMessages', withErr)
@@ -263,6 +337,136 @@ const AIAssistantOrder = ({ formData, onDataChange, onSubmit }) => {
   }
 
   const isFormValid = formData.aiAddress && formData.aiFullName && formData.aiPhone && formData.aiEmail && formData.aiConsentToText
+
+  const handleFinalSubmit = async () => {
+    if (!isFormValid || isSubmitting) return
+    setIsSubmitting(true)
+    try {
+      // Ensure session id
+      let sid = sessionIdRef.current
+      try {
+        if (!sid) {
+          const STORAGE_KEY = 'ai_session_id'
+          sid = localStorage.getItem(STORAGE_KEY)
+          if (!sid) {
+            sid = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+            localStorage.setItem(STORAGE_KEY, sid)
+          }
+          sessionIdRef.current = sid
+        }
+      } catch {}
+
+      // Prepare jobs
+      const jobs = Array.isArray(formData.aiJobs) ? formData.aiJobs.map(j => ({ id: j.id, name: j.name, price: Number(j.price) || 0 })) : []
+
+      // Persist request
+      let formId = ''
+      try {
+        const stored = await storeRequest({
+          source: 'website',
+          form_type: 'ai',
+          session_id: sid,
+          contact: {
+            fullName: formData.aiFullName,
+            email: formData.aiEmail,
+            phone: formData.aiPhone,
+            address: formData.aiAddress,
+            aiConsentToText: formData.aiConsentToText,
+          },
+          jobs,
+          messages: Array.isArray(formData.aiMessages) ? formData.aiMessages.map(m => ({ sender: m.sender, content: String(m.content || ''), photos_count: Array.isArray(m.photos) ? m.photos.length : 0, session_id: sid })) : [],
+          photos: (() => {
+            const list = []
+            if (Array.isArray(formData.aiMessages)) {
+              formData.aiMessages.forEach((m) => {
+                if (Array.isArray(m.photos)) {
+                  m.photos.forEach((p) => list.push({ url: p.url, name: p.name, origin: 'ai-message', session_id: sid }))
+                }
+              })
+            }
+            if (Array.isArray(formData.aiPhotos)) {
+              formData.aiPhotos.forEach((p) => list.push({ url: p.url, name: p.name, origin: 'ai-current', session_id: sid }))
+            }
+            return list
+          })(),
+        })
+        formId = (stored && (stored.form_id || stored.request_id)) || ''
+      } catch (_) {}
+
+      // Upload all photos to storage and collect public links
+      const allPhotos = []
+      try {
+        if (Array.isArray(formData.aiMessages)) {
+          formData.aiMessages.forEach((m) => {
+            if (m && m.sender === 'user' && Array.isArray(m.photos) && m.photos.length > 0) {
+              m.photos.forEach((p) => allPhotos.push(p))
+            }
+          })
+        }
+        if (Array.isArray(formData.aiPhotos)) {
+          allPhotos.push(...formData.aiPhotos)
+        }
+      } catch {}
+
+      const photoLinks = []
+      try {
+        for (const it of allPhotos) {
+          let file = it && it.file
+          if (!file && it && it.url && typeof it.url === 'string' && it.url.startsWith('blob:')) {
+            try {
+              const resp = await fetch(it.url)
+              const blob = await resp.blob()
+              file = new File([blob], it.name || 'photo.jpg', { type: blob.type || 'image/jpeg' })
+            } catch {}
+          }
+          if (!file) continue
+          const sig = await signFileUpload({ filename: file.name || 'photo.jpg', contentType: file.type || 'application/octet-stream', formId })
+          await fetch(sig.put_url, { method: 'PUT', headers: { 'Content-Type': sig.content_type || file.type || 'application/octet-stream' }, body: file })
+          const committed = await commitUploadedFile({ formId, key: sig.key, contentType: sig.content_type || file.type, size: file.size })
+          if (committed && committed.url) photoLinks.push(committed.url)
+        }
+      } catch {}
+
+      // Telegram notification with links
+      try {
+        const jobsSummary = Array.isArray(formData.aiJobs) ? formData.aiJobs.map(j => `${j.name} - $${Number(j.price || 0)}`) : []
+        const total = Array.isArray(formData.aiJobs) ? formData.aiJobs.reduce((s, j) => s + (Number(j.price) || 0), 0) : 0
+        const tg = buildTelegramMessage('New AI Assistant Submission', {
+          Address: formData.aiAddress || '-',
+          FullName: formData.aiFullName || '-',
+          Phone: formData.aiPhone || '-',
+          Email: formData.aiEmail || '-',
+          ConsentToText: !!formData.aiConsentToText,
+          Jobs: jobsSummary,
+          JobsTotal: total,
+          MessagesCount: Array.isArray(formData.aiMessages) ? formData.aiMessages.length : 0,
+          Source: 'AI Assistant',
+          FormID: formId,
+        })
+        const linksText = (photoLinks.length > 0) ? ('\n' + photoLinks.map((u, i) => `Photo ${i + 1}: ${u}`).join('\n')) : ''
+        await backendSendTelegram(tg + linksText)
+      } catch (_) {}
+
+      // SMS confirmation
+      try {
+        const to = normalizePhone(formData.aiPhone)
+        if (to && formData.aiConsentToText) {
+          const text = `Hi${formData.aiFullName ? ' ' + formData.aiFullName : ''}! Thanks for your request — we will contact you soon.`
+          await backendSendSms({ to, text, subject: 'AI Assistant Request' })
+        }
+      } catch (_) {}
+
+      setSubmitted(true)
+      if (typeof onSubmit === 'function') {
+        try { onSubmit() } catch {}
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('AI final submit failed', err)
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
   const calculateTotal = () => {
     let total = 0
     ;(formData.aiJobs || []).forEach(j => { const n = Number(j.price); if (!Number.isNaN(n)) total += n })
@@ -435,10 +639,14 @@ const AIAssistantOrder = ({ formData, onDataChange, onSubmit }) => {
               <span className="text-lg font-semibold text-gray-800">Estimated Total:</span>
               <span className="text-xl font-bold text-primary-600">{calculateTotal()}</span>
             </div>
-            <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={onSubmit} disabled={!isFormValid} className={`w-full py-3 px-6 rounded-xl font-medium flex items-center justify-center ${isFormValid ? 'bg-green-600 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}>
-              <span>Submit Request</span>
-              <SafeIcon icon={FiArrowRight} className="ml-2 w-5 h-5" />
-            </motion.button>
+            {submitted ? (
+              <div className="text-center py-4 text-green-700">Thanks! We've received your request.</div>
+            ) : (
+              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={handleFinalSubmit} disabled={!isFormValid || isSubmitting} className={`w-full py-3 px-6 rounded-xl font-medium flex items-center justify-center ${isFormValid && !isSubmitting ? 'bg-green-600 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}>
+                <span>{isSubmitting ? 'Submitting…' : 'Submit Request'}</span>
+              </motion.button>
+            )}
+              
           </div>
         </div>
       </div>

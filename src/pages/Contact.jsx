@@ -3,8 +3,10 @@ import AddressAutocomplete from '../common/AddressAutocomplete';
 import Hero from '../components/Hero';
 import SafeIcon from '../common/SafeIcon';
 import * as FiIcons from 'react-icons/fi';
+import { storeRequest, sendTelegram, sendSms, signFileUpload, commitUploadedFile } from '../common/BackendAPI';
+import { buildTelegramMessage } from '../common/MessageFormatter';
 
-const { FiPhone, FiMessageSquare, FiMail, FiSend, FiUpload, FiMapPin, FiCheck } = FiIcons;
+const { FiPhone, FiMessageSquare, FiMail, FiSend, FiUpload, FiMapPin, FiCheck, FiX } = FiIcons;
 
 const GOOGLE_PLACES_SCRIPT_ID = 'google-maps-places-script';
 const loadGoogleMapsScript = (apiKey) => {
@@ -39,8 +41,12 @@ const Contact = () => {
     address: '',
     serviceType: '',
     description: '',
-    photos: null
+    photos: null,
+    consentToText: false
   });
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
   const mapRef = useRef(null);
 
   const serviceTypes = [
@@ -114,20 +120,124 @@ const Contact = () => {
   };
 
   const handleFileChange = (e) => {
-    setFormData(prev => ({ ...prev, photos: e.target.files }));
+    try {
+      const list = Array.from(e.target.files || [])
+      if (list.length === 0) return
+      const existing = Array.isArray(formData.photos) ? formData.photos : []
+      const room = Math.max(0, 10 - existing.length)
+      const toAdd = list.slice(0, room).map(f => ({ file: f, name: f.name, type: f.type, size: f.size, url: URL.createObjectURL(f) }))
+      setFormData(prev => ({ ...prev, photos: [...existing, ...toAdd] }))
+      // reset input value to allow re-select same files
+      try { e.target.value = '' } catch (_) {}
+    } catch (_) {}
   };
 
-  const handleSubmit = (e) => {
+  const removePhotoAt = (idx) => {
+    const items = Array.isArray(formData.photos) ? [...formData.photos] : []
+    if (idx < 0 || idx >= items.length) return
+    try { if (items[idx] && items[idx].url && items[idx].url.startsWith('blob:')) URL.revokeObjectURL(items[idx].url) } catch (_) {}
+    items.splice(idx, 1)
+    setFormData(prev => ({ ...prev, photos: items }))
+  };
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    // Optional enforcement: ensure 10 digits
+    setErrorMsg('');
     const phoneDigits = formData.phone.replace(/\D/g, '');
     if (phoneDigits.length !== 10) {
-      alert('Please enter a valid US phone number: (XXX) XXX-XXXX');
+      setErrorMsg('Please enter a valid US phone number: (XXX) XXX-XXXX');
       return;
     }
-    // Handle form submission here
-    console.log('Form submitted:', formData);
-    alert('Thank you for your request! We\'ll get back to you soon.');
+
+    setSubmitting(true);
+    // session id
+    let sessionId = '';
+    try {
+      const K = 'site_session_id';
+      sessionId = localStorage.getItem(K) || '';
+      if (!sessionId) {
+        sessionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        localStorage.setItem(K, sessionId);
+      }
+    } catch (_) {}
+
+    try {
+      // 1) store request
+      const resp = await storeRequest({
+        source: 'website',
+        form_type: 'contact',
+        session_id: sessionId || undefined,
+        contact: {
+          name: formData.name,
+          phone: formData.phone,
+          address: formData.address,
+          consentToText: !!formData.consentToText,
+        },
+        meta: {
+          source_page: 'Contact',
+          description: formData.description,
+          serviceType: formData.serviceType || ''
+        }
+      });
+      const formId = (resp && (resp.form_id || resp.request_id)) || '';
+
+      // 2) upload photos via presigned flow (if any) and collect public URLs
+      try {
+        const items = Array.isArray(formData.photos) ? formData.photos : [];
+        var photoLinks = [];
+        for (const it of items) {
+          const f = (it && it.file) ? it.file : it;
+          if (!f) continue;
+          const sig = await signFileUpload({ filename: f.name || 'photo.jpg', contentType: f.type || 'application/octet-stream', formId });
+          await fetch(sig.put_url, { method: 'PUT', headers: { 'Content-Type': sig.content_type || f.type || 'application/octet-stream' }, body: f });
+          const committed = await commitUploadedFile({ formId, key: sig.key, contentType: sig.content_type || f.type, size: f.size });
+          if (committed && committed.url) {
+            photoLinks.push(committed.url);
+          }
+        }
+      } catch (_) {}
+
+      // 3) telegram notification (with photo links if present)
+      try {
+        const msg = buildTelegramMessage('New Contact (Contact page)', {
+          Name: formData.name,
+          Phone: formData.phone,
+          Address: formData.address || '-',
+          Service: formData.serviceType || '-',
+          Description: formData.description || '-',
+          Photos: Array.isArray(formData.photos) ? formData.photos.length : 0,
+          FormID: formId
+        });
+        const linksText = (typeof photoLinks !== 'undefined' && Array.isArray(photoLinks) && photoLinks.length > 0)
+          ? ('\n' + photoLinks.map((u, i) => `Photo ${i + 1}: ${u}`).join('\n'))
+          : '';
+        await sendTelegram(msg + linksText);
+      } catch (_) {}
+
+      // 4) sms confirmation to client
+      try {
+        const normalizePhoneE164US = (value) => {
+          const digits = String(value || '').replace(/\D/g, '')
+          if (!digits) return ''
+          if (digits.length === 10) return `+1${digits}`
+          if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`
+          return digits.startsWith('+') ? digits : `+${digits}`
+        }
+        const to = normalizePhoneE164US(formData.phone)
+        if (to && formData.consentToText) {
+          const smsText = `Hi${formData.name ? ' ' + formData.name : ''}! Thanks for contacting Handyman of South Charlotte. We received your request and will reach out soon.`
+          await sendSms({ to, text: smsText, subject: 'Contact Request' })
+        }
+      } catch (_) {}
+
+      setSubmitted(true);
+      setSubmitting(false);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('Contact submit failed', err);
+      setErrorMsg('Submission failed. Please try again.');
+      setSubmitting(false);
+    }
   };
 
   useEffect(() => {
@@ -150,6 +260,43 @@ const Contact = () => {
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  if (submitted) {
+    return (
+      <div className="bg-white">
+        <Hero 
+          title="Successfully sent!" 
+          description="Thank you for your request. We will reach out to you shortly." 
+          showCTA={false} 
+        />
+        <section className="py-16 lg:py-20">
+          <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-100 text-green-600 mb-6">
+              <SafeIcon icon={FiCheck} className="w-8 h-8" />
+            </div>
+            <h2 className="text-3xl font-bold text-primary-800 mb-3">Request submitted</h2>
+            <p className="text-primary-600 mb-8">We received your details and will contact you soon. You can also call or text us anytime.</p>
+            <div className="flex flex-col sm:flex-row gap-4 justify-center">
+              <a 
+                href="tel:+19803167792"
+                className="inline-flex items-center justify-center space-x-2 bg-primary-600 text-white px-8 py-3 rounded-lg hover:bg-green-500 focus:bg-green-500 transition-colors duration-200 font-medium"
+              >
+                <SafeIcon icon={FiPhone} className="w-5 h-5" />
+                <span>Call (980) 316‑7792</span>
+              </a>
+              <a 
+                href="sms:+19803167792?body=Hi! I just submitted the contact form."
+                className="inline-flex items-center justify-center space-x-2 border-2 border-primary-600 text-primary-600 px-8 py-3 rounded-lg hover:bg-primary-50 transition-colors duration-200 font-medium"
+              >
+                <SafeIcon icon={FiMessageSquare} className="w-5 h-5" />
+                <span>Send a text</span>
+              </a>
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-white">
@@ -317,9 +464,22 @@ const Contact = () => {
                   />
                 </div>
 
+                <div className="pt-2">
+                  <label className="flex items-start space-x-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={!!formData.consentToText}
+                      onChange={(e) => setFormData(prev => ({ ...prev, consentToText: e.target.checked }))}
+                      className="mt-1 h-5 w-5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      required
+                    />
+                    <span className="text-sm text-primary-700">I agree to receive text messages from Handyman of South Charlotte. *</span>
+                  </label>
+                </div>
+
                 <div>
                   <label htmlFor="photos" className="block text-sm font-medium text-primary-700 mb-2">
-                    Photo Upload
+                    Photo Upload (up to 10)
                   </label>
                   <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-green-400 transition-all duration-180">
                     <SafeIcon icon={FiUpload} className="w-8 h-8 text-gray-400 mx-auto mb-2" />
@@ -342,14 +502,39 @@ const Contact = () => {
                       Upload photos of your project for better estimates
                     </p>
                   </div>
+
+                  {Array.isArray(formData.photos) && formData.photos.length > 0 && (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+                      {formData.photos.map((p, idx) => (
+                        <div key={idx} className="relative group">
+                          <img src={p.url} alt={p.name || `photo-${idx+1}`} className="w-full h-24 object-cover rounded-lg" />
+                          <button
+                            type="button"
+                            onClick={() => removePhotoAt(idx)}
+                            className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                            aria-label="Remove photo"
+                          >
+                            <SafeIcon icon={FiX} className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
+
+                {errorMsg && (
+                  <div className="p-3 rounded-md bg-red-50 border border-red-200 text-red-700 text-sm">
+                    {errorMsg}
+                  </div>
+                )}
 
                 <button
                   type="submit"
-                  className="w-full bg-primary-600 text-white py-3 px-6 rounded-lg hover:bg-green-500 focus:bg-green-500 transition-all duration-180 font-medium flex items-center justify-center space-x-2"
+                  disabled={submitting}
+                  className={`w-full py-3 px-6 rounded-lg transition-all duration-180 font-medium flex items-center justify-center space-x-2 ${submitting ? 'bg-gray-300 text-gray-600 cursor-not-allowed' : 'bg-primary-600 text-white hover:bg-green-500 focus:bg-green-500'}`}
                 >
                   <SafeIcon icon={FiSend} className="w-5 h-5" />
-                  <span>Send Request</span>
+                  <span>{submitting ? 'Sending…' : 'Send Request'}</span>
                 </button>
               </form>
             </div>
